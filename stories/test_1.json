@@ -1,0 +1,54 @@
+{
+  "slug": "test 1",
+  "title": "История 1 (тест)",
+  "short_description": "Краткое описание: 123",
+  "intro_text": "Введение: 123",
+  "outro_text": "Конец: 123",
+  "is_active": true,
+  "steps": [
+    {
+      "narrative_text": "текст 1",
+      "question": "Вопрос 1",
+      "explanation": "Объяснение 1",
+      "options": [
+        {
+          "text": "ответ 1",
+          "outcome_text": "вывод 1.1",
+          "is_correct": true
+        },
+        {
+          "text": "ответ 2",
+          "outcome_text": "вывод 1.2",
+          "is_correct": false
+        },
+        {
+          "text": "ответ 3",
+          "outcome_text": "вывод 1.3",
+          "is_correct": false
+        }
+      ]
+    },
+    {
+      "narrative_text": "текст 2",
+      "question": "Вопрос 2",
+      "explanation": "Объяснение 2",
+      "options": [
+        {
+          "text": "ответ 1",
+          "outcome_text": "вывод 2.1",
+          "is_correct": true
+        },
+        {
+          "text": "ответ 2",
+          "outcome_text": "вывод 2.2",
+          "is_correct": false
+        },
+        {
+          "text": "ответ 3",
+          "outcome_text": "вывод 2.3",
+          "is_correct": false
+        }
+      ]
+    }
+  ]
+}
