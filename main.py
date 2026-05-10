@@ -23,6 +23,7 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     args = parse_args()
     settings = load_settings()
@@ -39,11 +40,19 @@ def main() -> int:
         logging.error("Environment variable TELEGRAM_BOT_TOKEN is empty")
         return 1
 
+    from telegram.error import InvalidToken
+
     from app.bot import HistoryBot
 
     application = HistoryBot(database).build_application(settings.telegram_bot_token)
     logging.info("Bot is running")
-    application.run_polling(allowed_updates=["message", "callback_query"])
+    try:
+        application.run_polling(allowed_updates=["message", "callback_query"])
+    except InvalidToken:
+        logging.error(
+            "Telegram rejected TELEGRAM_BOT_TOKEN. Create a new token via @BotFather and update PyCharm/.env."
+        )
+        return 1
     return 0
 
 

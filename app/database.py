@@ -32,6 +32,7 @@ class Database:
             short_description TEXT NOT NULL,
             intro_text TEXT NOT NULL,
             outro_text TEXT NOT NULL,
+            editorial_sources TEXT NOT NULL DEFAULT '[]',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -97,23 +98,39 @@ class Database:
             self._migrate_schema(connection)
 
     def _migrate_schema(self, connection: sqlite3.Connection) -> None:
-        columns = {row["name"] for row in connection.execute("PRAGMA table_info(step_options)").fetchall()}
-        if "outcome_text" not in columns:
+        option_columns = {row["name"] for row in connection.execute("PRAGMA table_info(step_options)").fetchall()}
+        if "outcome_text" not in option_columns:
             connection.execute("ALTER TABLE step_options ADD COLUMN outcome_text TEXT NOT NULL DEFAULT ''")
+
+        story_columns = {row["name"] for row in connection.execute("PRAGMA table_info(stories)").fetchall()}
+        if "editorial_sources" not in story_columns:
+            connection.execute("ALTER TABLE stories ADD COLUMN editorial_sources TEXT NOT NULL DEFAULT '[]'")
 
     def seed_stories(self, stories_dir: Path) -> int:
         stories_dir.mkdir(parents=True, exist_ok=True)
         story_files = sorted(stories_dir.glob("*.json"))
 
         with self.connect() as connection:
+            active_slugs = []
             for story_file in story_files:
                 payload = json.loads(story_file.read_text(encoding="utf-8"))
                 self._upsert_story(connection, payload)
+                active_slugs.append(payload["slug"])
+
+            if active_slugs:
+                placeholders = ", ".join("?" for _ in active_slugs)
+                connection.execute(
+                    f"UPDATE stories SET is_active = 0, updated_at = ? WHERE slug NOT IN ({placeholders})",
+                    (utc_now(), *active_slugs),
+                )
+            else:
+                connection.execute("UPDATE stories SET is_active = 0, updated_at = ?", (utc_now(),))
 
         return len(story_files)
 
     def _upsert_story(self, connection: sqlite3.Connection, payload: dict[str, Any]) -> None:
         self._validate_story_payload(payload)
+        editorial_sources = self._serialize_editorial_sources(payload)
         timestamp = utc_now()
 
         existing_story = connection.execute(
@@ -123,10 +140,17 @@ class Database:
 
         if existing_story:
             story_id = existing_story["id"]
+            connection.execute("DELETE FROM user_answers WHERE story_id = ?", (story_id,))
             connection.execute(
                 """
                 UPDATE stories
-                SET title = ?, short_description = ?, intro_text = ?, outro_text = ?, is_active = ?, updated_at = ?
+                SET title = ?,
+                    short_description = ?,
+                    intro_text = ?,
+                    outro_text = ?,
+                    editorial_sources = ?,
+                    is_active = ?,
+                    updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -134,6 +158,7 @@ class Database:
                     payload["short_description"],
                     payload["intro_text"],
                     payload["outro_text"],
+                    editorial_sources,
                     int(payload.get("is_active", True)),
                     timestamp,
                     story_id,
@@ -143,8 +168,10 @@ class Database:
         else:
             cursor = connection.execute(
                 """
-                INSERT INTO stories (slug, title, short_description, intro_text, outro_text, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO stories (
+                    slug, title, short_description, intro_text, outro_text, editorial_sources, is_active, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["slug"],
@@ -152,6 +179,7 @@ class Database:
                     payload["short_description"],
                     payload["intro_text"],
                     payload["outro_text"],
+                    editorial_sources,
                     int(payload.get("is_active", True)),
                     timestamp,
                     timestamp,
@@ -200,6 +228,8 @@ class Database:
         if missing_fields:
             raise ValueError(f"Story is missing required fields: {', '.join(missing_fields)}")
 
+        self._validate_editorial_sources(payload)
+
         if not payload["steps"]:
             raise ValueError(f"Story '{payload['slug']}' must contain at least one step")
 
@@ -227,6 +257,36 @@ class Database:
                         "'text', 'is_correct' and 'outcome_text'"
                     )
 
+    def _validate_editorial_sources(self, payload: dict[str, Any]) -> None:
+        sources = payload.get("editorial_sources", [])
+        if sources is None:
+            return
+        if not isinstance(sources, list):
+            raise ValueError(f"Story '{payload['slug']}' field 'editorial_sources' must be a list")
+
+        for source_index, source in enumerate(sources, start=1):
+            if not isinstance(source, dict):
+                raise ValueError(f"Story '{payload['slug']}', source {source_index} must be an object")
+
+            title = str(source.get("title", "")).strip()
+            url = str(source.get("url", "")).strip()
+            if not title or not url:
+                raise ValueError(f"Story '{payload['slug']}', source {source_index} must contain 'title' and 'url'")
+            if not url.startswith(("http://", "https://")):
+                raise ValueError(f"Story '{payload['slug']}', source {source_index} has invalid url: {url}")
+
+    def _serialize_editorial_sources(self, payload: dict[str, Any]) -> str:
+        sources = []
+        for source in payload.get("editorial_sources") or []:
+            sources.append(
+                {
+                    "type": str(source.get("type", "")).strip(),
+                    "title": str(source["title"]).strip(),
+                    "url": str(source["url"]).strip(),
+                }
+            )
+        return json.dumps(sources, ensure_ascii=False)
+
     def get_active_stories(self) -> list[sqlite3.Row]:
         with self.connect() as connection:
             return connection.execute(
@@ -242,7 +302,7 @@ class Database:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT id, slug, title, short_description, intro_text, outro_text
+                SELECT id, slug, title, short_description, intro_text, outro_text, editorial_sources
                 FROM stories
                 WHERE id = ? AND is_active = 1
                 """,
@@ -253,7 +313,7 @@ class Database:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT id, slug, title, short_description, intro_text, outro_text
+                SELECT id, slug, title, short_description, intro_text, outro_text, editorial_sources
                 FROM stories
                 WHERE is_active = 1
                 ORDER BY RANDOM()
@@ -333,7 +393,8 @@ class Database:
                     cs.current_step_index,
                     cs.status,
                     s.title AS story_title,
-                    s.outro_text
+                    s.outro_text,
+                    s.editorial_sources
                 FROM chat_sessions cs
                 JOIN stories s ON s.id = cs.current_story_id
                 WHERE cs.chat_id = ? AND cs.status = 'active'
@@ -436,7 +497,7 @@ class Database:
                 session_status = "completed"
 
             story = connection.execute(
-                "SELECT title, outro_text FROM stories WHERE id = ?",
+                "SELECT title, outro_text, editorial_sources FROM stories WHERE id = ?",
                 (session["current_story_id"],),
             ).fetchone()
 
@@ -445,6 +506,7 @@ class Database:
                 "story_id": session["current_story_id"],
                 "story_title": story["title"],
                 "outro_text": story["outro_text"],
+                "editorial_sources": story["editorial_sources"],
                 "step_index": step["step_index"],
                 "explanation": step["explanation"],
                 "selected_text": selected_option["text"],

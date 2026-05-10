@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -17,6 +18,38 @@ MENU_CALLBACK = "menu"
 RANDOM_STORY_CALLBACK = "story:random"
 STORY_CALLBACK_PREFIX = "story:"
 ANSWER_CALLBACK_PREFIX = "answer:"
+
+
+def format_editorial_sources(raw_sources: str | None) -> str:
+    if not raw_sources:
+        return ""
+
+    try:
+        sources = json.loads(raw_sources)
+    except json.JSONDecodeError:
+        logger.warning("Could not decode editorial sources: %s", raw_sources)
+        return ""
+
+    if not isinstance(sources, list):
+        logger.warning("Editorial sources must be a list, got %s", type(sources).__name__)
+        return ""
+
+    links = []
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+
+        title = str(source.get("title", "")).strip()
+        url = str(source.get("url", "")).strip()
+        if not title or not url:
+            continue
+
+        links.append(f'{len(links) + 1}. <a href="{html.escape(url, quote=True)}">{html.escape(title)}</a>')
+
+    if not links:
+        return ""
+
+    return "\n\n<b>Первоисточники:</b>\n" + "\n".join(links)
 
 
 class HistoryBot:
@@ -212,11 +245,13 @@ class HistoryBot:
         )
 
         if result["status"] == "completed":
+            sources_text = format_editorial_sources(result["editorial_sources"])
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=(
                     f"<b>История завершена: {html.escape(result['story_title'])}</b>\n\n"
                     f"{html.escape(result['outro_text'])}"
+                    f"{sources_text}"
                 ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(

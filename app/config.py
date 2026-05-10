@@ -22,7 +22,7 @@ class Settings:
 def load_settings() -> Settings:
     load_dotenv()
 
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip().strip("'\"")
     database_path = Path(os.getenv("DATABASE_PATH", str(DEFAULT_DB_PATH))).expanduser().resolve()
 
     return Settings(

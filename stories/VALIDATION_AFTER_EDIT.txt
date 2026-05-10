@@ -1,0 +1,8 @@
+COMMAND: python main.py --seed-only
+
+STDOUT:
+
+STDERR:
+2026-05-09 18:04:13,506 | INFO | root | Loaded 25 story file(s) into /mnt/data/history_project_1_editorial_final/history_bot.db
+
+RETURN CODE: 0
