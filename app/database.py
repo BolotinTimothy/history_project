@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ class Database:
             slug TEXT NOT NULL UNIQUE,
             title TEXT NOT NULL,
             short_description TEXT NOT NULL,
+            tags TEXT NOT NULL DEFAULT '[]',
             intro_text TEXT NOT NULL,
             outro_text TEXT NOT NULL,
             editorial_sources TEXT NOT NULL DEFAULT '[]',
@@ -103,6 +105,8 @@ class Database:
             connection.execute("ALTER TABLE step_options ADD COLUMN outcome_text TEXT NOT NULL DEFAULT ''")
 
         story_columns = {row["name"] for row in connection.execute("PRAGMA table_info(stories)").fetchall()}
+        if "tags" not in story_columns:
+            connection.execute("ALTER TABLE stories ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
         if "editorial_sources" not in story_columns:
             connection.execute("ALTER TABLE stories ADD COLUMN editorial_sources TEXT NOT NULL DEFAULT '[]'")
 
@@ -130,6 +134,7 @@ class Database:
 
     def _upsert_story(self, connection: sqlite3.Connection, payload: dict[str, Any]) -> None:
         self._validate_story_payload(payload)
+        tags = self._serialize_tags(payload)
         editorial_sources = self._serialize_editorial_sources(payload)
         timestamp = utc_now()
 
@@ -140,12 +145,12 @@ class Database:
 
         if existing_story:
             story_id = existing_story["id"]
-            connection.execute("DELETE FROM user_answers WHERE story_id = ?", (story_id,))
             connection.execute(
                 """
                 UPDATE stories
                 SET title = ?,
                     short_description = ?,
+                    tags = ?,
                     intro_text = ?,
                     outro_text = ?,
                     editorial_sources = ?,
@@ -156,6 +161,7 @@ class Database:
                 (
                     payload["title"],
                     payload["short_description"],
+                    tags,
                     payload["intro_text"],
                     payload["outro_text"],
                     editorial_sources,
@@ -164,19 +170,19 @@ class Database:
                     story_id,
                 ),
             )
-            connection.execute("DELETE FROM story_steps WHERE story_id = ?", (story_id,))
         else:
             cursor = connection.execute(
                 """
                 INSERT INTO stories (
-                    slug, title, short_description, intro_text, outro_text, editorial_sources, is_active, created_at, updated_at
+                    slug, title, short_description, tags, intro_text, outro_text, editorial_sources, is_active, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload["slug"],
                     payload["title"],
                     payload["short_description"],
+                    tags,
                     payload["intro_text"],
                     payload["outro_text"],
                     editorial_sources,
@@ -187,46 +193,145 @@ class Database:
             )
             story_id = cursor.lastrowid
 
+        active_step_indexes = []
         for step_index, step in enumerate(payload["steps"], start=1):
-            step_cursor = connection.execute(
-                """
-                INSERT INTO story_steps (story_id, step_index, narrative_text, question, explanation, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    story_id,
-                    step_index,
-                    step["narrative_text"],
-                    step["question"],
-                    step["explanation"],
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            step_id = step_cursor.lastrowid
+            active_step_indexes.append(step_index)
+            existing_step = connection.execute(
+                "SELECT id FROM story_steps WHERE story_id = ? AND step_index = ?",
+                (story_id, step_index),
+            ).fetchone()
 
-            for option_index, option in enumerate(step["options"], start=1):
+            if existing_step:
+                step_id = existing_step["id"]
                 connection.execute(
                     """
-                    INSERT INTO step_options (step_id, option_index, text, outcome_text, is_correct, created_at, updated_at)
+                    UPDATE story_steps
+                    SET narrative_text = ?,
+                        question = ?,
+                        explanation = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        step["narrative_text"],
+                        step["question"],
+                        step["explanation"],
+                        timestamp,
+                        step_id,
+                    ),
+                )
+            else:
+                step_cursor = connection.execute(
+                    """
+                    INSERT INTO story_steps (story_id, step_index, narrative_text, question, explanation, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        step_id,
-                        option_index,
-                        option["text"],
-                        option["outcome_text"],
-                        int(option["is_correct"]),
+                        story_id,
+                        step_index,
+                        step["narrative_text"],
+                        step["question"],
+                        step["explanation"],
                         timestamp,
                         timestamp,
                     ),
                 )
+                step_id = step_cursor.lastrowid
+
+            active_option_indexes = []
+            for option_index, option in enumerate(step["options"], start=1):
+                active_option_indexes.append(option_index)
+                existing_option = connection.execute(
+                    "SELECT id FROM step_options WHERE step_id = ? AND option_index = ?",
+                    (step_id, option_index),
+                ).fetchone()
+
+                if existing_option:
+                    connection.execute(
+                        """
+                        UPDATE step_options
+                        SET text = ?,
+                            outcome_text = ?,
+                            is_correct = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            option["text"],
+                            option["outcome_text"],
+                            int(option["is_correct"]),
+                            timestamp,
+                            existing_option["id"],
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO step_options (step_id, option_index, text, outcome_text, is_correct, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            step_id,
+                            option_index,
+                            option["text"],
+                            option["outcome_text"],
+                            int(option["is_correct"]),
+                            timestamp,
+                            timestamp,
+                        ),
+                    )
+
+            option_placeholders = ", ".join("?" for _ in active_option_indexes)
+            stale_options_query = f"""
+                SELECT id
+                FROM step_options
+                WHERE step_id = ? AND option_index NOT IN ({option_placeholders})
+            """
+            stale_option_params = (step_id, *active_option_indexes)
+            connection.execute(
+                f"""
+                DELETE FROM user_answers
+                WHERE step_id = ?
+                  AND (
+                    selected_option_id IN ({stale_options_query})
+                    OR correct_option_id IN ({stale_options_query})
+                  )
+                """,
+                (step_id, *stale_option_params, *stale_option_params),
+            )
+            connection.execute(
+                f"""
+                DELETE FROM step_options
+                WHERE step_id = ? AND option_index NOT IN ({option_placeholders})
+                """,
+                stale_option_params,
+            )
+
+        step_placeholders = ", ".join("?" for _ in active_step_indexes)
+        stale_steps_query = f"""
+            SELECT id
+            FROM story_steps
+            WHERE story_id = ? AND step_index NOT IN ({step_placeholders})
+        """
+        stale_step_params = (story_id, *active_step_indexes)
+        connection.execute(
+            f"DELETE FROM user_answers WHERE step_id IN ({stale_steps_query})",
+            stale_step_params,
+        )
+        connection.execute(
+            f"DELETE FROM story_steps WHERE story_id = ? AND step_index NOT IN ({step_placeholders})",
+            stale_step_params,
+        )
 
     def _validate_story_payload(self, payload: dict[str, Any]) -> None:
         required_story_fields = ["slug", "title", "short_description", "intro_text", "outro_text", "steps"]
         missing_fields = [field for field in required_story_fields if field not in payload]
         if missing_fields:
             raise ValueError(f"Story is missing required fields: {', '.join(missing_fields)}")
+
+        tags = payload.get("tags", [])
+        if tags is not None and not isinstance(tags, list):
+            raise ValueError(f"Story '{payload['slug']}' field 'tags' must be a list")
 
         self._validate_editorial_sources(payload)
 
@@ -256,6 +361,14 @@ class Database:
                         f"Story '{payload['slug']}', step {step_index}, option {option_index} must contain "
                         "'text', 'is_correct' and 'outcome_text'"
                     )
+
+    def _serialize_tags(self, payload: dict[str, Any]) -> str:
+        tags = []
+        for tag in payload.get("tags") or []:
+            value = str(tag).strip()
+            if value and value not in tags:
+                tags.append(value)
+        return json.dumps(tags, ensure_ascii=False)
 
     def _validate_editorial_sources(self, payload: dict[str, Any]) -> None:
         sources = payload.get("editorial_sources", [])
@@ -291,7 +404,7 @@ class Database:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT id, slug, title, short_description
+                SELECT id, slug, title, short_description, tags
                 FROM stories
                 WHERE is_active = 1
                 ORDER BY title
@@ -302,7 +415,7 @@ class Database:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT id, slug, title, short_description, intro_text, outro_text, editorial_sources
+                SELECT id, slug, title, short_description, tags, intro_text, outro_text, editorial_sources
                 FROM stories
                 WHERE id = ? AND is_active = 1
                 """,
@@ -313,7 +426,7 @@ class Database:
         with self.connect() as connection:
             return connection.execute(
                 """
-                SELECT id, slug, title, short_description, intro_text, outro_text, editorial_sources
+                SELECT id, slug, title, short_description, tags, intro_text, outro_text, editorial_sources
                 FROM stories
                 WHERE is_active = 1
                 ORDER BY RANDOM()
@@ -356,6 +469,181 @@ class Database:
                 """,
                 (step_id,),
             ).fetchall()
+
+    def get_user_profile(self, chat_id: int) -> dict[str, Any]:
+        with self.connect() as connection:
+            total_stories = int(
+                connection.execute("SELECT COUNT(*) FROM stories WHERE is_active = 1").fetchone()[0]
+            )
+            answer_totals = connection.execute(
+                """
+                SELECT COUNT(*) AS total_answers, COALESCE(SUM(is_correct), 0) AS correct_answers
+                FROM user_answers
+                WHERE chat_id = ?
+                """,
+                (chat_id,),
+            ).fetchone()
+            total_answers = int(answer_totals["total_answers"])
+            correct_answers = int(answer_totals["correct_answers"])
+
+            completed_rows = connection.execute(
+                """
+                WITH answered AS (
+                    SELECT
+                        story_id,
+                        COUNT(DISTINCT step_id) AS answered_steps,
+                        MAX(answered_at) AS last_answered_at
+                    FROM user_answers
+                    WHERE chat_id = ?
+                    GROUP BY story_id
+                ),
+                step_counts AS (
+                    SELECT story_id, COUNT(*) AS total_steps
+                    FROM story_steps
+                    GROUP BY story_id
+                )
+                SELECT
+                    s.id,
+                    s.title,
+                    s.short_description,
+                    s.tags,
+                    a.answered_steps,
+                    sc.total_steps,
+                    a.last_answered_at
+                FROM answered a
+                JOIN step_counts sc ON sc.story_id = a.story_id
+                JOIN stories s ON s.id = a.story_id
+                WHERE s.is_active = 1 AND a.answered_steps >= sc.total_steps
+                ORDER BY a.last_answered_at DESC
+                """,
+                (chat_id,),
+            ).fetchall()
+
+            interacted_rows = connection.execute(
+                """
+                WITH answered AS (
+                    SELECT
+                        story_id,
+                        COUNT(DISTINCT step_id) AS answered_steps,
+                        MAX(answered_at) AS last_answered_at
+                    FROM user_answers
+                    WHERE chat_id = ?
+                    GROUP BY story_id
+                ),
+                step_counts AS (
+                    SELECT story_id, COUNT(*) AS total_steps
+                    FROM story_steps
+                    GROUP BY story_id
+                )
+                SELECT
+                    s.id,
+                    s.title,
+                    s.short_description,
+                    s.tags,
+                    a.answered_steps,
+                    sc.total_steps,
+                    a.last_answered_at
+                FROM answered a
+                JOIN step_counts sc ON sc.story_id = a.story_id
+                JOIN stories s ON s.id = a.story_id
+                WHERE s.is_active = 1
+                ORDER BY a.last_answered_at DESC
+                """,
+                (chat_id,),
+            ).fetchall()
+
+            continue_row = connection.execute(
+                """
+                SELECT
+                    cs.current_story_id AS id,
+                    cs.current_step_index,
+                    cs.updated_at,
+                    s.title,
+                    s.short_description,
+                    s.tags,
+                    (
+                        SELECT COUNT(*)
+                        FROM story_steps
+                        WHERE story_id = s.id
+                    ) AS total_steps
+                FROM chat_sessions cs
+                JOIN stories s ON s.id = cs.current_story_id
+                WHERE cs.chat_id = ? AND cs.status = 'active' AND s.is_active = 1
+                """,
+                (chat_id,),
+            ).fetchone()
+
+        favorite_source_rows = completed_rows or interacted_rows
+        topic_counts: Counter[str] = Counter()
+        for row in favorite_source_rows:
+            for tag in self._deserialize_tags(row["tags"]):
+                topic_counts[tag] += 1
+
+        if not topic_counts and continue_row:
+            for tag in self._deserialize_tags(continue_row["tags"]):
+                topic_counts[tag] += 1
+
+        last_answer_row = interacted_rows[0] if interacted_rows else None
+        last_story = self._profile_story_from_answer(last_answer_row) if last_answer_row else None
+        if continue_row and (not last_answer_row or str(continue_row["updated_at"]) >= str(last_answer_row["last_answered_at"])):
+            last_story = self._profile_story_from_session(continue_row)
+
+        return {
+            "completed_stories": len(completed_rows),
+            "total_stories": total_stories,
+            "correct_answers": correct_answers,
+            "total_answers": total_answers,
+            "correct_percent": round(correct_answers / total_answers * 100) if total_answers else 0,
+            "favorite_topics": [
+                {"name": name, "count": count}
+                for name, count in topic_counts.most_common(3)
+            ],
+            "last_story": last_story,
+            "continue_story": self._profile_story_from_session(continue_row) if continue_row else None,
+        }
+
+    def _deserialize_tags(self, raw_tags: str | None) -> list[str]:
+        if not raw_tags:
+            return []
+        try:
+            tags = json.loads(raw_tags)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(tags, list):
+            return []
+        return [str(tag).strip() for tag in tags if str(tag).strip()]
+
+    def _profile_story_from_answer(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        total_steps = int(row["total_steps"])
+        answered_steps = int(row["answered_steps"])
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "short_description": row["short_description"],
+            "status": "completed" if answered_steps >= total_steps else "started",
+            "current_step": min(answered_steps + 1, total_steps),
+            "total_steps": total_steps,
+            "progress_percent": round(answered_steps / total_steps * 100) if total_steps else 0,
+            "last_activity_at": row["last_answered_at"],
+        }
+
+    def _profile_story_from_session(self, row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        total_steps = int(row["total_steps"])
+        current_step = int(row["current_step_index"])
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "short_description": row["short_description"],
+            "status": "active",
+            "current_step": current_step,
+            "total_steps": total_steps,
+            "progress_percent": round(current_step / total_steps * 100) if total_steps else 0,
+            "last_activity_at": row["updated_at"],
+        }
 
     def start_story_for_chat(self, chat_id: int, user_id: int | None, username: str | None, story_id: int) -> None:
         timestamp = utc_now()

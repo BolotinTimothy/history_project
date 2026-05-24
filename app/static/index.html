@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#f5efe5" />
+    <title>Исторические сюжеты</title>
+    <link rel="stylesheet" href="/static/styles.css?v=profile" />
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar" aria-label="Приложение">
+        <button class="icon-button" id="backButton" type="button" aria-label="Назад" hidden>
+          <span aria-hidden="true">‹</span>
+        </button>
+        <div>
+          <p class="eyebrow">Mini App</p>
+          <h1>Исторические сюжеты</h1>
+        </div>
+        <button class="icon-button" id="reloadButton" type="button" aria-label="Обновить">
+          <span aria-hidden="true">↻</span>
+        </button>
+      </header>
+
+      <main id="app" class="content" aria-live="polite">
+        <section class="state-panel">
+          <div class="loader" aria-hidden="true"></div>
+          <p>Загрузка...</p>
+        </section>
+      </main>
+    </div>
+
+    <template id="storyCardTemplate">
+      <article class="story-card">
+        <div>
+          <p class="story-card__kicker">Сюжет</p>
+          <h2></h2>
+          <p></p>
+        </div>
+        <button class="primary-button" type="button">Начать</button>
+      </article>
+    </template>
+
+    <script src="/static/app.js?v=profile" type="module"></script>
+  </body>
+</html>
