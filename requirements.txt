@@ -1,2 +1,4 @@
 python-telegram-bot==21.11.1
 python-dotenv==1.0.1
+fastapi==0.115.11
+uvicorn==0.34.0

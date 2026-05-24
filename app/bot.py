@@ -4,7 +4,7 @@ import html
 import json
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.error import BadRequest
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -53,18 +53,38 @@ def format_editorial_sources(raw_sources: str | None) -> str:
 
 
 class HistoryBot:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, webapp_url: str = "") -> None:
         self.database = database
+        self.webapp_url = webapp_url
 
     def build_application(self, token: str) -> Application:
         application = Application.builder().token(token).build()
         application.add_handler(CommandHandler("start", self.start_command))
-        application.add_handler(CommandHandler("stories", self.start_command))
+        application.add_handler(CommandHandler("stories", self.stories_command))
         application.add_handler(CallbackQueryHandler(self.handle_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         return application
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_chat:
+            return
+
+        if self.webapp_url:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=(
+                    "Откройте Mini App, чтобы проходить интерактивные исторические сюжеты "
+                    "в удобном полноэкранном интерфейсе."
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("Открыть Mini App", web_app=WebAppInfo(url=self.webapp_url))]]
+                ),
+            )
+            return
+
+        await self.stories_command(update, context)
+
+    async def stories_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_chat:
             return
         await self.send_story_menu(
@@ -78,6 +98,12 @@ class HistoryBot:
 
     async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_chat:
+            return
+        if self.webapp_url:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="Нажмите /start, чтобы открыть Mini App.",
+            )
             return
         await context.bot.send_message(
             chat_id=update.effective_chat.id,

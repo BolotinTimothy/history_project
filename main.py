@@ -11,6 +11,12 @@ from app.database import Database
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive WWII history Telegram bot")
     parser.add_argument(
+        "--mode",
+        choices=("web", "bot"),
+        default="web",
+        help="Run Telegram Mini App web server or the launcher bot",
+    )
+    parser.add_argument(
         "--seed-only",
         action="store_true",
         help="Create tables and load story JSON files into the database without starting the bot",
@@ -36,6 +42,16 @@ def main() -> int:
     if args.seed_only:
         return 0
 
+    if args.mode == "web":
+        import uvicorn
+
+        from app.web import create_web_app
+
+        web_app = create_web_app(settings, database)
+        logging.info("Mini App web server is running on http://%s:%s", settings.webapp_host, settings.webapp_port)
+        uvicorn.run(web_app, host=settings.webapp_host, port=settings.webapp_port)
+        return 0
+
     if not settings.telegram_bot_token:
         logging.error("Environment variable TELEGRAM_BOT_TOKEN is empty")
         return 1
@@ -44,7 +60,9 @@ def main() -> int:
 
     from app.bot import HistoryBot
 
-    application = HistoryBot(database).build_application(settings.telegram_bot_token)
+    application = HistoryBot(database, webapp_url=settings.telegram_webapp_url).build_application(
+        settings.telegram_bot_token
+    )
     logging.info("Bot is running")
     try:
         application.run_polling(allowed_updates=["message", "callback_query"])
