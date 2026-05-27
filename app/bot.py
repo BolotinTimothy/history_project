@@ -20,6 +20,7 @@ RANDOM_STORY_CALLBACK = "story:random"
 STORY_CALLBACK_PREFIX = "story:"
 ANSWER_CALLBACK_PREFIX = "answer:"
 SHARE_BOT_HANDLE = "@StoryCompleterBot"
+SHARE_BOT_URL = "https://t.me/StoryCompleterBot"
 
 
 def format_editorial_sources(raw_sources: str | None) -> str:
@@ -315,7 +316,7 @@ class HistoryBot:
             if self.webapp_url:
                 share_text = format_result_share_text(result["story_title"], result.get("score"))
                 keyboard.append(
-                    [InlineKeyboardButton("Поделиться", url=build_telegram_share_url(share_text))]
+                    [InlineKeyboardButton("Поделиться", url=build_telegram_share_url(share_text, SHARE_BOT_URL))]
                 )
             keyboard.append([InlineKeyboardButton("Выбрать новую историю", callback_data=MENU_CALLBACK)])
             await context.bot.send_message(

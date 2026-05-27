@@ -4,6 +4,7 @@ const backButton = document.querySelector("#backButton");
 const reloadButton = document.querySelector("#reloadButton");
 const storyCardTemplate = document.querySelector("#storyCardTemplate");
 const SHARE_BOT_HANDLE = "@StoryCompleterBot";
+const SHARE_BOT_URL = "https://t.me/StoryCompleterBot";
 
 const state = {
   user: null,
@@ -600,7 +601,7 @@ async function shareCompletionResult() {
     return;
   }
 
-  if (navigator.share) {
+  if (isMobileViewport() && navigator.share) {
     try {
       await navigator.share({ text });
       return;
@@ -632,8 +633,12 @@ function scoreNumber(value) {
 }
 
 function buildTelegramShareUrl(text) {
-  const params = new URLSearchParams({ text });
+  const params = new URLSearchParams({ url: SHARE_BOT_URL, text });
   return `https://t.me/share/url?${params.toString()}`;
+}
+
+function isMobileViewport() {
+  return window.matchMedia?.("(hover: none) and (pointer: coarse)").matches ?? false;
 }
 
 function renderLoading(message = "Загрузка...") {
