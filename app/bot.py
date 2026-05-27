@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 import json
 import logging
+from urllib.parse import urlencode
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.constants import ParseMode
@@ -50,6 +51,35 @@ def format_editorial_sources(raw_sources: str | None) -> str:
         return ""
 
     return "\n\n<b>Первоисточники:</b>\n" + "\n".join(links)
+
+
+def format_new_achievements(achievements: list[dict]) -> str:
+    if not achievements:
+        return ""
+
+    title = "Новое достижение" if len(achievements) == 1 else "Новые достижения"
+    lines = [f"<b>{title}</b>"]
+    for index, achievement in enumerate(achievements, start=1):
+        achievement_title = html.escape(str(achievement.get("title", "")).strip())
+        description = html.escape(str(achievement.get("description", "")).strip())
+        lines.append(f"{index}. <b>{achievement_title}</b>\n{description}")
+    return "\n\n".join(lines)
+
+
+def format_result_share_text(story_title: str, score: dict | None) -> str:
+    score = score or {}
+    correct_answers = int(score.get("correct_answers") or 0)
+    total_answers = int(score.get("total_steps") or score.get("total_answers") or 0)
+    if total_answers:
+        return f"Я прошёл сюжет «{story_title}»: {correct_answers}/{total_answers} верных решений"
+    return f"Я прошёл сюжет «{story_title}»"
+
+
+def build_telegram_share_url(text: str, url: str) -> str:
+    params = {"text": text}
+    if url:
+        params["url"] = url
+    return f"https://t.me/share/url?{urlencode(params)}"
 
 
 class HistoryBot:
@@ -270,8 +300,23 @@ class HistoryBot:
             parse_mode=ParseMode.HTML,
         )
 
+        achievements_text = format_new_achievements(result.get("new_achievements", []))
+        if achievements_text:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=achievements_text,
+                parse_mode=ParseMode.HTML,
+            )
+
         if result["status"] == "completed":
             sources_text = format_editorial_sources(result["editorial_sources"])
+            keyboard = []
+            if self.webapp_url:
+                share_text = format_result_share_text(result["story_title"], result.get("score"))
+                keyboard.append(
+                    [InlineKeyboardButton("Поделиться результатом", url=build_telegram_share_url(share_text, self.webapp_url))]
+                )
+            keyboard.append([InlineKeyboardButton("Выбрать новую историю", callback_data=MENU_CALLBACK)])
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text=(
@@ -280,9 +325,7 @@ class HistoryBot:
                     f"{sources_text}"
                 ),
                 parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Выбрать новую историю", callback_data=MENU_CALLBACK)]]
-                ),
+                reply_markup=InlineKeyboardMarkup(keyboard),
             )
             return
 

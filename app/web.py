@@ -51,9 +51,10 @@ def create_web_app(settings: Settings | None = None, database: Database | None =
 
     @web_app.get("/api/state")
     async def state(user: MiniAppUser = Depends(get_current_user)) -> dict[str, Any]:
+        completed_story_ids = database.get_completed_story_ids(user.session_id)
         return {
             "user": _serialize_user(user),
-            "stories": _serialize_stories(database.get_active_stories()),
+            "stories": _serialize_stories(database.get_active_stories(), completed_story_ids),
             "session": _build_session_payload(database, user.session_id),
             "profile": database.get_user_profile(user.session_id),
         }
@@ -90,6 +91,7 @@ def create_web_app(settings: Settings | None = None, database: Database | None =
                 "explanation": result["explanation"],
             },
             "status": result["status"],
+            "new_achievements": result.get("new_achievements", []),
         }
 
         if result["status"] == "completed":
@@ -97,6 +99,7 @@ def create_web_app(settings: Settings | None = None, database: Database | None =
                 "story_id": result["story_id"],
                 "story_title": result["story_title"],
                 "outro_text": result["outro_text"],
+                "score": result["score"],
                 "editorial_sources": _parse_editorial_sources(result["editorial_sources"]),
             }
             payload["session"] = None
@@ -169,7 +172,8 @@ def _build_session_payload(database: Database, session_id: int) -> dict[str, Any
     }
 
 
-def _serialize_stories(stories: list[Any]) -> list[dict[str, Any]]:
+def _serialize_stories(stories: list[Any], completed_story_ids: set[int] | None = None) -> list[dict[str, Any]]:
+    completed_story_ids = completed_story_ids or set()
     return [
         {
             "id": story["id"],
@@ -177,6 +181,7 @@ def _serialize_stories(stories: list[Any]) -> list[dict[str, Any]]:
             "title": story["title"],
             "short_description": story["short_description"],
             "tags": _parse_tags(story["tags"]),
+            "is_completed": int(story["id"]) in completed_story_ids,
         }
         for story in stories
     ]

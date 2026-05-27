@@ -93,6 +93,14 @@ class Database:
             FOREIGN KEY (selected_option_id) REFERENCES step_options(id),
             FOREIGN KEY (correct_option_id) REFERENCES step_options(id)
         );
+
+        CREATE TABLE IF NOT EXISTS user_achievements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            achievement_key TEXT NOT NULL,
+            unlocked_at TEXT NOT NULL,
+            UNIQUE (chat_id, achievement_key)
+        );
         """
 
         with self.connect() as connection:
@@ -411,6 +419,10 @@ class Database:
                 """
             ).fetchall()
 
+    def get_completed_story_ids(self, chat_id: int) -> set[int]:
+        with self.connect() as connection:
+            return self._get_completed_story_ids(connection, chat_id)
+
     def get_story(self, story_id: int) -> sqlite3.Row | None:
         with self.connect() as connection:
             return connection.execute(
@@ -572,6 +584,7 @@ class Database:
                 """,
                 (chat_id,),
             ).fetchone()
+            achievements = self._get_achievement_payloads(connection, chat_id)
 
         favorite_source_rows = completed_rows or interacted_rows
         topic_counts: Counter[str] = Counter()
@@ -600,7 +613,276 @@ class Database:
             ],
             "last_story": last_story,
             "continue_story": self._profile_story_from_session(continue_row) if continue_row else None,
+            "achievements": achievements,
+            "achievements_summary": {
+                "unlocked": sum(1 for achievement in achievements if achievement["unlocked"]),
+                "total": len(achievements),
+            },
         }
+
+    def _get_achievement_payloads(self, connection: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+        stats = self._collect_achievement_stats(connection, chat_id)
+        definitions = self._build_achievement_definitions(stats)
+        self._unlock_reached_achievements(connection, chat_id, definitions)
+        unlocked_at_by_key = self._get_unlocked_achievement_map(connection, chat_id)
+        return self._build_achievement_payloads(definitions, unlocked_at_by_key)
+
+    def _unlock_new_achievements(self, connection: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+        stats = self._collect_achievement_stats(connection, chat_id)
+        definitions = self._build_achievement_definitions(stats)
+        new_keys = self._unlock_reached_achievements(connection, chat_id, definitions)
+        if not new_keys:
+            return []
+
+        unlocked_at_by_key = self._get_unlocked_achievement_map(connection, chat_id)
+        return [
+            achievement
+            for achievement in self._build_achievement_payloads(definitions, unlocked_at_by_key)
+            if achievement["key"] in new_keys
+        ]
+
+    def _collect_achievement_stats(self, connection: sqlite3.Connection, chat_id: int) -> dict[str, Any]:
+        active_stories = connection.execute(
+            """
+            SELECT id, title, short_description, tags
+            FROM stories
+            WHERE is_active = 1
+            """
+        ).fetchall()
+        completed_story_ids = self._get_completed_story_ids(connection, chat_id)
+        leningrad_story_ids = {
+            int(story["id"])
+            for story in active_stories
+            if self._is_leningrad_story(story)
+        }
+
+        return {
+            "completed_stories": len(completed_story_ids),
+            "total_stories": len(active_stories),
+            "current_correct_streak": self._get_current_correct_streak(connection, chat_id),
+            "perfect_completed_stories": len(self._get_perfect_completed_story_ids(connection, chat_id)),
+            "leningrad_completed_stories": len(completed_story_ids & leningrad_story_ids),
+            "leningrad_total_stories": len(leningrad_story_ids),
+        }
+
+    def _get_completed_story_ids(self, connection: sqlite3.Connection, chat_id: int) -> set[int]:
+        rows = connection.execute(
+            """
+            WITH answered AS (
+                SELECT story_id, COUNT(DISTINCT step_id) AS answered_steps
+                FROM user_answers
+                WHERE chat_id = ?
+                GROUP BY story_id
+            ),
+            step_counts AS (
+                SELECT story_id, COUNT(*) AS total_steps
+                FROM story_steps
+                GROUP BY story_id
+            )
+            SELECT a.story_id
+            FROM answered a
+            JOIN step_counts sc ON sc.story_id = a.story_id
+            JOIN stories s ON s.id = a.story_id
+            WHERE s.is_active = 1 AND a.answered_steps >= sc.total_steps
+            """,
+            (chat_id,),
+        ).fetchall()
+        return {int(row["story_id"]) for row in rows}
+
+    def _get_perfect_completed_story_ids(self, connection: sqlite3.Connection, chat_id: int) -> set[int]:
+        rows = connection.execute(
+            """
+            WITH answered AS (
+                SELECT
+                    story_id,
+                    COUNT(DISTINCT step_id) AS answered_steps,
+                    SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) AS wrong_answers
+                FROM user_answers
+                WHERE chat_id = ?
+                GROUP BY story_id
+            ),
+            step_counts AS (
+                SELECT story_id, COUNT(*) AS total_steps
+                FROM story_steps
+                GROUP BY story_id
+            )
+            SELECT a.story_id
+            FROM answered a
+            JOIN step_counts sc ON sc.story_id = a.story_id
+            JOIN stories s ON s.id = a.story_id
+            WHERE s.is_active = 1
+              AND a.answered_steps >= sc.total_steps
+              AND a.wrong_answers = 0
+            """,
+            (chat_id,),
+        ).fetchall()
+        return {int(row["story_id"]) for row in rows}
+
+    def _get_current_correct_streak(self, connection: sqlite3.Connection, chat_id: int) -> int:
+        rows = connection.execute(
+            """
+            SELECT is_correct
+            FROM user_answers
+            WHERE chat_id = ?
+            ORDER BY id DESC
+            """,
+            (chat_id,),
+        ).fetchall()
+
+        streak = 0
+        for row in rows:
+            if not int(row["is_correct"]):
+                break
+            streak += 1
+        return streak
+
+    def _is_leningrad_story(self, story: sqlite3.Row) -> bool:
+        text = " ".join(
+            [
+                str(story["title"] or ""),
+                str(story["short_description"] or ""),
+                " ".join(self._deserialize_tags(story["tags"])),
+            ]
+        ).casefold()
+        return "ленинград" in text or "блокад" in text
+
+    def _build_achievement_definitions(self, stats: dict[str, Any]) -> list[dict[str, Any]]:
+        completed_stories = int(stats["completed_stories"])
+        total_stories = int(stats["total_stories"])
+        leningrad_completed = int(stats["leningrad_completed_stories"])
+        leningrad_total = int(stats["leningrad_total_stories"])
+
+        return [
+            self._achievement_definition(
+                "first_story",
+                "Первый сюжет",
+                "Завершите первую историю.",
+                completed_stories,
+                1,
+            ),
+            self._achievement_definition(
+                "five_stories",
+                "Пять сюжетов",
+                "Пройдите 5 историй.",
+                completed_stories,
+                5,
+            ),
+            self._achievement_definition(
+                "ten_stories",
+                "Десять сюжетов",
+                "Пройдите 10 историй.",
+                completed_stories,
+                10,
+            ),
+            self._achievement_definition(
+                "all_stories",
+                "Вся библиотека",
+                "Завершите все активные истории.",
+                completed_stories,
+                total_stories,
+            ),
+            self._achievement_definition(
+                "leningrad_chronicle",
+                "Ленинградская хроника",
+                "Пройдите все сюжеты о Ленинграде и блокаде.",
+                leningrad_completed,
+                leningrad_total,
+            ),
+            self._achievement_definition(
+                "perfect_story",
+                "Безошибочный сюжет",
+                "Завершите историю без неверных решений.",
+                int(stats["perfect_completed_stories"]),
+                1,
+            ),
+            self._achievement_definition(
+                "ten_correct_streak",
+                "Точная серия",
+                "Дайте 10 верных решений подряд.",
+                int(stats["current_correct_streak"]),
+                10,
+            ),
+        ]
+
+    def _achievement_definition(
+        self,
+        key: str,
+        title: str,
+        description: str,
+        progress: int,
+        target: int,
+    ) -> dict[str, Any]:
+        capped_progress = max(0, min(progress, target)) if target > 0 else 0
+        return {
+            "key": key,
+            "title": title,
+            "description": description,
+            "progress": capped_progress,
+            "target": target,
+            "is_reached": target > 0 and progress >= target,
+        }
+
+    def _unlock_reached_achievements(
+        self,
+        connection: sqlite3.Connection,
+        chat_id: int,
+        definitions: list[dict[str, Any]],
+    ) -> set[str]:
+        unlocked_at_by_key = self._get_unlocked_achievement_map(connection, chat_id)
+        timestamp = utc_now()
+        new_keys: set[str] = set()
+
+        for achievement in definitions:
+            key = achievement["key"]
+            if not achievement["is_reached"] or key in unlocked_at_by_key:
+                continue
+
+            cursor = connection.execute(
+                """
+                INSERT OR IGNORE INTO user_achievements (chat_id, achievement_key, unlocked_at)
+                VALUES (?, ?, ?)
+                """,
+                (chat_id, key, timestamp),
+            )
+            if cursor.rowcount:
+                new_keys.add(key)
+
+        return new_keys
+
+    def _get_unlocked_achievement_map(self, connection: sqlite3.Connection, chat_id: int) -> dict[str, str]:
+        rows = connection.execute(
+            """
+            SELECT achievement_key, unlocked_at
+            FROM user_achievements
+            WHERE chat_id = ?
+            """,
+            (chat_id,),
+        ).fetchall()
+        return {str(row["achievement_key"]): str(row["unlocked_at"]) for row in rows}
+
+    def _build_achievement_payloads(
+        self,
+        definitions: list[dict[str, Any]],
+        unlocked_at_by_key: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        payloads = []
+        for achievement in definitions:
+            target = int(achievement["target"])
+            unlocked_at = unlocked_at_by_key.get(achievement["key"])
+            progress = target if unlocked_at and target > 0 else int(achievement["progress"])
+            payloads.append(
+                {
+                    "key": achievement["key"],
+                    "title": achievement["title"],
+                    "description": achievement["description"],
+                    "progress": progress,
+                    "target": target,
+                    "progress_percent": round(progress / target * 100) if target else 0,
+                    "unlocked": unlocked_at is not None,
+                    "unlocked_at": unlocked_at,
+                }
+            )
+        return payloads
 
     def _deserialize_tags(self, raw_tags: str | None) -> list[str]:
         if not raw_tags:
@@ -788,6 +1070,8 @@ class Database:
                 "SELECT title, outro_text, editorial_sources FROM stories WHERE id = ?",
                 (session["current_story_id"],),
             ).fetchone()
+            story_score = self._get_story_score(connection, chat_id, int(session["current_story_id"]))
+            new_achievements = self._unlock_new_achievements(connection, chat_id)
 
             return {
                 "status": session_status,
@@ -795,6 +1079,7 @@ class Database:
                 "story_title": story["title"],
                 "outro_text": story["outro_text"],
                 "editorial_sources": story["editorial_sources"],
+                "score": story_score,
                 "step_index": step["step_index"],
                 "explanation": step["explanation"],
                 "selected_text": selected_option["text"],
@@ -802,4 +1087,27 @@ class Database:
                 "correct_text": correct_option["text"],
                 "is_correct": bool(selected_option["is_correct"]),
                 "next_step_index": next_step["step_index"] if next_step else None,
+                "new_achievements": new_achievements,
             }
+
+    def _get_story_score(self, connection: sqlite3.Connection, chat_id: int, story_id: int) -> dict[str, int]:
+        answer_totals = connection.execute(
+            """
+            SELECT COUNT(*) AS total_answers, COALESCE(SUM(is_correct), 0) AS correct_answers
+            FROM user_answers
+            WHERE chat_id = ? AND story_id = ?
+            """,
+            (chat_id, story_id),
+        ).fetchone()
+        total_steps = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM story_steps WHERE story_id = ?",
+                (story_id,),
+            ).fetchone()[0]
+        )
+
+        return {
+            "correct_answers": int(answer_totals["correct_answers"]),
+            "total_answers": int(answer_totals["total_answers"]),
+            "total_steps": total_steps,
+        }

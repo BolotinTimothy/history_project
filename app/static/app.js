@@ -11,6 +11,7 @@ const state = {
   profile: null,
   feedback: null,
   completion: null,
+  newAchievements: [],
   screen: "loading",
 };
 
@@ -20,6 +21,8 @@ reloadButton.addEventListener("click", loadState);
 loadState();
 
 function initTelegram() {
+  applyTelegramTheme();
+
   if (!telegram) {
     return;
   }
@@ -30,15 +33,48 @@ function initTelegram() {
   if (supportsTelegram("6.1")) {
     try {
       telegram.setHeaderColor?.("secondary_bg_color");
-      telegram.setBackgroundColor?.(telegram.themeParams?.bg_color || "#f5efe5");
+      telegram.setBackgroundColor?.(getTelegramBackgroundColor());
     } catch {
       // Telegram clients differ slightly by platform; visual hints are optional.
     }
   }
 
+  telegram.onEvent?.("themeChanged", applyTelegramTheme);
+
   if (supportsTelegram("6.1")) {
     telegram.BackButton?.onClick(handleBack);
   }
+}
+
+function applyTelegramTheme() {
+  const previewTheme = getPreviewThemeOverride();
+  const systemThemeIsDark =
+    telegram?.colorScheme === "dark" ||
+    (!telegram && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+  const isDark = previewTheme === "dark" || (!previewTheme && systemThemeIsDark);
+  const theme = isDark ? "dark" : "light";
+  document.documentElement.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", getTelegramBackgroundColor(theme));
+
+  if (supportsTelegram("6.1")) {
+    try {
+      telegram.setBackgroundColor?.(getTelegramBackgroundColor(theme));
+    } catch {
+      // Telegram theme sync is best-effort and varies by client.
+    }
+  }
+}
+
+function getPreviewThemeOverride() {
+  const value = new URLSearchParams(window.location.search).get("preview_theme");
+  return value === "dark" || value === "light" ? value : "";
+}
+
+function getTelegramBackgroundColor(theme = document.documentElement.dataset.theme) {
+  if (telegram?.themeParams?.bg_color) {
+    return telegram.themeParams.bg_color;
+  }
+  return theme === "dark" ? "#10161d" : "#f5efe5";
 }
 
 async function loadState() {
@@ -51,6 +87,7 @@ async function loadState() {
     state.profile = payload.profile;
     state.feedback = null;
     state.completion = null;
+    state.newAchievements = [];
 
     if (state.session) {
       renderSession();
@@ -71,6 +108,7 @@ async function startStory(storyId) {
     state.profile = payload.profile;
     state.feedback = null;
     state.completion = null;
+    state.newAchievements = [];
     renderSession();
   } catch (error) {
     renderError(error.message);
@@ -86,6 +124,7 @@ async function startRandomStory() {
     state.profile = payload.profile;
     state.feedback = null;
     state.completion = null;
+    state.newAchievements = [];
     renderSession();
   } catch (error) {
     renderError(error.message);
@@ -101,6 +140,7 @@ async function submitAnswer(optionId) {
     state.session = payload.session;
     state.profile = payload.profile;
     state.completion = payload.completion ?? null;
+    state.newAchievements = payload.new_achievements ?? [];
     renderFeedback();
   } catch (error) {
     renderError(error.message);
@@ -143,6 +183,7 @@ function renderLibrary() {
   head.append(titleBlock, actions);
   fragment.append(head);
   fragment.append(renderProfile());
+  fragment.append(renderAchievements());
 
   if (!state.stories.length) {
     const empty = el("section", "state-panel");
@@ -213,6 +254,44 @@ function renderProfile() {
   return panel;
 }
 
+function renderAchievements() {
+  const achievements = state.profile?.achievements ?? [];
+  const summary = state.profile?.achievements_summary ?? {};
+  const panel = el("section", "achievements-panel");
+  const head = el("div", "achievements-head");
+  const titleBlock = el("div");
+  titleBlock.append(el("p", "eyebrow", "Достижения"), el("h2", "", "Коллекция"));
+  head.append(titleBlock, el("strong", "", `${summary.unlocked ?? 0}/${summary.total ?? achievements.length}`));
+
+  const list = el("div", "achievement-list");
+  for (const achievement of achievements) {
+    list.append(createAchievementItem(achievement));
+  }
+
+  panel.append(head, list);
+  return panel;
+}
+
+function createAchievementItem(achievement) {
+  const item = el("article", `achievement-item ${achievement.unlocked ? "is-unlocked" : "is-locked"}`);
+  const marker = el("span", "achievement-marker", achievement.unlocked ? "✓" : `${achievement.progress_percent ?? 0}%`);
+  marker.setAttribute("aria-hidden", "true");
+
+  const copy = el("div", "achievement-copy");
+  copy.append(el("strong", "", achievement.title), el("span", "", achievement.description));
+
+  const meta = el("div", "achievement-meta");
+  meta.append(el("span", "", achievement.unlocked ? "Получено" : `${achievement.progress}/${achievement.target}`));
+  const progress = el("div", "achievement-progress");
+  const bar = el("span");
+  bar.style.width = `${achievement.progress_percent ?? 0}%`;
+  progress.append(bar);
+  meta.append(progress);
+
+  item.append(marker, copy, meta);
+  return item;
+}
+
 function createProfileMetric(label, value, hint) {
   const metric = el("div", "profile-metric");
   metric.append(el("span", "", label), el("strong", "", value), el("small", "", hint));
@@ -264,7 +343,19 @@ function createStoryCard(story) {
   card.querySelector("h2").textContent = story.title;
   card.querySelector("p:last-child").textContent = story.short_description;
 
+  if (story.is_completed) {
+    card.classList.add("is-completed");
+    const status = el("span", "story-card__status", "Пройдено");
+    status.title = "Этот сюжет уже завершён";
+    card.querySelector(".story-card__kicker").after(status);
+  }
+
   const button = card.querySelector("button");
+  if (story.is_completed) {
+    button.textContent = "Пройти заново";
+    button.classList.remove("primary-button");
+    button.classList.add("secondary-button");
+  }
   button.addEventListener("click", () => startStory(story.id));
   return card;
 }
@@ -359,12 +450,17 @@ function renderFeedback() {
     createFact("Исторически верное решение", state.feedback.correct_text)
   );
   body.append(facts, el("p", "feedback-copy", state.feedback.explanation));
+  const unlockedBlock = createUnlockedAchievementsBlock(state.newAchievements);
+  if (unlockedBlock) {
+    body.append(unlockedBlock);
+  }
 
   const actions = el("div", "action-row");
   const continueButton = el("button", "primary-button", state.completion ? "Завершение" : "Продолжить");
   continueButton.type = "button";
   continueButton.addEventListener("click", () => {
     state.feedback = null;
+    state.newAchievements = [];
     if (state.completion) {
       renderCompletion();
     } else {
@@ -382,6 +478,24 @@ function createFact(term, description) {
   const item = el("div");
   item.append(el("dt", "", term), el("dd", "", description));
   return item;
+}
+
+function createUnlockedAchievementsBlock(achievements) {
+  if (!achievements.length) {
+    return null;
+  }
+
+  const block = el("section", "new-achievements");
+  block.append(el("p", "eyebrow", achievements.length === 1 ? "Новое достижение" : "Новые достижения"));
+
+  const list = el("div", "new-achievement-list");
+  for (const achievement of achievements) {
+    const item = el("div", "new-achievement-item");
+    item.append(el("strong", "", achievement.title), el("span", "", achievement.description));
+    list.append(item);
+  }
+  block.append(list);
+  return block;
 }
 
 function renderCompletion() {
@@ -415,14 +529,77 @@ function renderCompletion() {
   }
 
   const actions = el("div", "action-row");
-  const listButton = el("button", "primary-button", "Выбрать новую историю");
+  const shareButton = el("button", "primary-button share-button", formatCompletionShareText(state.completion));
+  shareButton.type = "button";
+  shareButton.title = "Поделиться результатом в Telegram";
+  shareButton.addEventListener("click", shareCompletionResult);
+
+  const listButton = el("button", "secondary-button", "Выбрать новую историю");
   listButton.type = "button";
   listButton.addEventListener("click", renderLibrary);
-  actions.append(listButton);
+  actions.append(shareButton, listButton);
   body.append(actions);
 
   view.append(banner, body);
   appRoot.replaceChildren(view);
+}
+
+async function shareCompletionResult() {
+  if (!state.completion) {
+    return;
+  }
+
+  const text = formatCompletionShareText(state.completion);
+  const url = getAppShareUrl();
+  const telegramShareUrl = buildTelegramShareUrl(text, url);
+  pulse();
+
+  if (telegram?.openTelegramLink) {
+    telegram.openTelegramLink(telegramShareUrl);
+    return;
+  }
+
+  if (navigator.share) {
+    try {
+      await navigator.share({ text, url });
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        return;
+      }
+    }
+  }
+
+  window.open(telegramShareUrl, "_blank", "noopener,noreferrer");
+}
+
+function formatCompletionShareText(completion) {
+  const score = completion?.score ?? {};
+  const correct = scoreNumber(score.correct_answers);
+  const total = scoreNumber(score.total_steps ?? score.total_answers);
+
+  if (correct !== null && total) {
+    return `Я прошёл сюжет «${completion.story_title}»: ${correct}/${total} верных решений`;
+  }
+
+  return `Я прошёл сюжет «${completion.story_title}»`;
+}
+
+function scoreNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function getAppShareUrl() {
+  const url = new URL(window.location.href);
+  url.hash = "";
+  url.search = "";
+  return url.toString();
+}
+
+function buildTelegramShareUrl(text, url) {
+  const params = new URLSearchParams({ url, text });
+  return `https://t.me/share/url?${params.toString()}`;
 }
 
 function renderLoading(message = "Загрузка...") {
@@ -449,6 +626,7 @@ function renderError(message) {
 function handleBack() {
   if (state.screen === "feedback") {
     state.feedback = null;
+    state.newAchievements = [];
     if (state.completion) {
       renderCompletion();
     } else {

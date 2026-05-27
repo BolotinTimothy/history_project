@@ -6,11 +6,43 @@
   --surface: var(--tg-theme-secondary-bg-color, #fffaf2);
   --surface-strong: #ffffff;
   --border: rgba(36, 45, 43, 0.12);
-  --accent: var(--tg-theme-button-color, #1f756f);
-  --accent-text: var(--tg-theme-button-text-color, #ffffff);
+  --accent: #1f756f;
+  --accent-text: #ffffff;
   --danger: #9d3a2f;
   --warning: #b56a2b;
   --shadow: 0 16px 42px rgba(41, 39, 31, 0.12);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: var(--tg-theme-bg-color, #10161d);
+  --text: var(--tg-theme-text-color, #f3eee4);
+  --muted: var(--tg-theme-hint-color, #a6b0b0);
+  --surface: var(--tg-theme-secondary-bg-color, #17222c);
+  --surface-strong: #202d38;
+  --border: rgba(243, 238, 228, 0.14);
+  --accent: #72d2c7;
+  --accent-text: #071514;
+  --danger: #ff8a7a;
+  --warning: #e3bd73;
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg: #10161d;
+    --text: #f3eee4;
+    --muted: #a6b0b0;
+    --surface: #17222c;
+    --surface-strong: #202d38;
+    --border: rgba(243, 238, 228, 0.14);
+    --accent: #72d2c7;
+    --accent-text: #071514;
+    --danger: #ff8a7a;
+    --warning: #e3bd73;
+    --shadow: 0 18px 48px rgba(0, 0, 0, 0.36);
+  }
 }
 
 * {
@@ -118,6 +150,7 @@ a:focus-visible {
 
 .state-panel,
 .profile-panel,
+.achievements-panel,
 .story-card,
 .story-view,
 .feedback-view,
@@ -160,6 +193,7 @@ a:focus-visible {
 
 .library-head h2,
 .profile-panel h2,
+.achievements-panel h2,
 .story-view h2,
 .feedback-view h2,
 .completion-view h2 {
@@ -177,6 +211,12 @@ a:focus-visible {
 }
 
 .profile-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+}
+
+.achievements-panel {
   display: grid;
   gap: 14px;
   padding: 16px;
@@ -280,6 +320,98 @@ a:focus-visible {
   background: var(--accent);
 }
 
+.achievements-head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.achievements-head strong {
+  color: var(--accent);
+  font-size: 1.28rem;
+  line-height: 1;
+}
+
+.achievement-list {
+  display: grid;
+  gap: 10px;
+}
+
+.achievement-item {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 10px 12px;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.achievement-item:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.achievement-item:last-child {
+  padding-bottom: 0;
+}
+
+.achievement-marker {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(31, 117, 111, 0.24);
+  border-radius: 50%;
+  background: rgba(31, 117, 111, 0.1);
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.achievement-item.is-locked .achievement-marker {
+  border-color: var(--border);
+  background: var(--surface-strong);
+  color: var(--muted);
+}
+
+.achievement-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.achievement-copy strong {
+  line-height: 1.2;
+}
+
+.achievement-copy span,
+.achievement-meta span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.achievement-meta {
+  display: grid;
+  grid-column: 2;
+  gap: 6px;
+}
+
+.achievement-progress {
+  overflow: hidden;
+  height: 7px;
+  border-radius: 999px;
+  background: rgba(31, 117, 111, 0.12);
+}
+
+.achievement-progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--warning));
+}
+
 .library-actions {
   display: grid;
   grid-template-columns: 1fr;
@@ -295,6 +427,27 @@ a:focus-visible {
   display: grid;
   gap: 18px;
   padding: 16px;
+}
+
+.story-card.is-completed {
+  border-color: rgba(31, 117, 111, 0.32);
+  background: color-mix(in srgb, var(--surface) 90%, rgba(31, 117, 111, 0.1) 10%);
+}
+
+.story-card__status {
+  display: inline-flex;
+  width: max-content;
+  max-width: 100%;
+  min-height: 26px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 3px 9px;
+  border: 1px solid rgba(31, 117, 111, 0.24);
+  border-radius: 999px;
+  background: rgba(31, 117, 111, 0.1);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 760;
 }
 
 .story-card h2 {
@@ -332,6 +485,14 @@ a:focus-visible {
   color: var(--text);
   border-color: var(--border);
   font-weight: 700;
+}
+
+.share-button {
+  min-width: 0;
+  width: 100%;
+  padding: 10px 14px;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .option-button {
@@ -524,6 +685,34 @@ a:focus-visible {
   margin: 0;
 }
 
+.new-achievements {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid rgba(181, 106, 43, 0.28);
+  border-radius: 8px;
+  background: rgba(181, 106, 43, 0.08);
+}
+
+.new-achievement-list {
+  display: grid;
+  gap: 8px;
+}
+
+.new-achievement-item {
+  display: grid;
+  gap: 3px;
+}
+
+.new-achievement-item strong {
+  line-height: 1.2;
+}
+
+.new-achievement-item span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .source-list {
   display: grid;
   gap: 8px;
@@ -594,5 +783,10 @@ a:focus-visible {
   .action-row {
     grid-template-columns: auto auto;
     justify-content: start;
+  }
+
+  .share-button {
+    width: auto;
+    max-width: 380px;
   }
 }
