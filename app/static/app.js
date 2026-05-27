@@ -3,6 +3,7 @@ const appRoot = document.querySelector("#app");
 const backButton = document.querySelector("#backButton");
 const reloadButton = document.querySelector("#reloadButton");
 const storyCardTemplate = document.querySelector("#storyCardTemplate");
+const SHARE_BOT_HANDLE = "@StoryCompleterBot";
 
 const state = {
   user: null,
@@ -570,7 +571,7 @@ function renderCompletion() {
   }
 
   const actions = el("div", "action-row");
-  const shareButton = el("button", "primary-button share-button", formatCompletionShareText(state.completion));
+  const shareButton = el("button", "primary-button share-button", "Поделиться");
   shareButton.type = "button";
   shareButton.title = "Поделиться результатом в Telegram";
   shareButton.addEventListener("click", shareCompletionResult);
@@ -591,8 +592,7 @@ async function shareCompletionResult() {
   }
 
   const text = formatCompletionShareText(state.completion);
-  const url = getAppShareUrl();
-  const telegramShareUrl = buildTelegramShareUrl(text, url);
+  const telegramShareUrl = buildTelegramShareUrl(text);
   pulse();
 
   if (telegram?.openTelegramLink) {
@@ -602,7 +602,7 @@ async function shareCompletionResult() {
 
   if (navigator.share) {
     try {
-      await navigator.share({ text, url });
+      await navigator.share({ text });
       return;
     } catch (error) {
       if (error?.name === "AbortError") {
@@ -620,10 +620,10 @@ function formatCompletionShareText(completion) {
   const total = scoreNumber(score.total_steps ?? score.total_answers);
 
   if (correct !== null && total) {
-    return `Я прошёл сюжет «${completion.story_title}»: ${correct}/${total} верных решений`;
+    return `Я прошёл сюжет «${completion.story_title}»: ${correct}/${total} верных решений\n${SHARE_BOT_HANDLE}`;
   }
 
-  return `Я прошёл сюжет «${completion.story_title}»`;
+  return `Я прошёл сюжет «${completion.story_title}»\n${SHARE_BOT_HANDLE}`;
 }
 
 function scoreNumber(value) {
@@ -631,15 +631,8 @@ function scoreNumber(value) {
   return Number.isFinite(number) && number >= 0 ? number : null;
 }
 
-function getAppShareUrl() {
-  const url = new URL(window.location.href);
-  url.hash = "";
-  url.search = "";
-  return url.toString();
-}
-
-function buildTelegramShareUrl(text, url) {
-  const params = new URLSearchParams({ url, text });
+function buildTelegramShareUrl(text) {
+  const params = new URLSearchParams({ text });
   return `https://t.me/share/url?${params.toString()}`;
 }
 
