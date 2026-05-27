@@ -29,6 +29,7 @@ function initTelegram() {
 
   telegram.ready();
   telegram.expand();
+  applyTelegramTheme();
 
   if (supportsTelegram("6.1")) {
     try {
@@ -50,6 +51,8 @@ function applyTelegramTheme() {
   const previewTheme = getPreviewThemeOverride();
   const systemThemeIsDark =
     telegram?.colorScheme === "dark" ||
+    isDarkColor(telegram?.themeParams?.bg_color) ||
+    isDarkColor(telegram?.themeParams?.secondary_bg_color) ||
     (!telegram && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
   const isDark = previewTheme === "dark" || (!previewTheme && systemThemeIsDark);
   const theme = isDark ? "dark" : "light";
@@ -75,6 +78,44 @@ function getTelegramBackgroundColor(theme = document.documentElement.dataset.the
     return telegram.themeParams.bg_color;
   }
   return theme === "dark" ? "#10161d" : "#f5efe5";
+}
+
+function isDarkColor(color) {
+  const rgb = parseColor(color);
+  if (!rgb) {
+    return false;
+  }
+
+  const [red, green, blue] = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  return luminance < 0.42;
+}
+
+function parseColor(color) {
+  if (!color) {
+    return null;
+  }
+
+  const value = String(color).trim();
+  if (/^#[0-9a-f]{3}$/i.test(value)) {
+    return value
+      .slice(1)
+      .split("")
+      .map((part) => parseInt(part + part, 16));
+  }
+
+  if (/^#[0-9a-f]{6}$/i.test(value)) {
+    return [1, 3, 5].map((start) => parseInt(value.slice(start, start + 2), 16));
+  }
+
+  const channels = value.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (!channels) {
+    return null;
+  }
+  return channels.slice(1, 4).map(Number);
 }
 
 async function loadState() {

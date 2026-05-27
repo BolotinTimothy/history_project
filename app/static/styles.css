@@ -18,7 +18,7 @@
   --bg: var(--tg-theme-bg-color, #10161d);
   --text: var(--tg-theme-text-color, #f3eee4);
   --muted: var(--tg-theme-hint-color, #a6b0b0);
-  --surface: var(--tg-theme-secondary-bg-color, #17222c);
+  --surface: #17222c;
   --surface-strong: #202d38;
   --border: rgba(243, 238, 228, 0.14);
   --accent: #72d2c7;
@@ -625,6 +625,11 @@ a:focus-visible {
   border-radius: 8px;
   background: rgba(31, 117, 111, 0.12);
   color: var(--accent);
+}
+
+:root[data-theme="dark"] .option-button .option-index {
+  background: var(--accent);
+  color: var(--accent-text);
 }
 
 .feedback-view.is-correct {
