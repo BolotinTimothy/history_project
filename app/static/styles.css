@@ -5,6 +5,7 @@
   --muted: var(--tg-theme-hint-color, #68716f);
   --surface: var(--tg-theme-secondary-bg-color, #fffaf2);
   --surface-strong: #ffffff;
+  --control-bg: color-mix(in srgb, var(--bg) 10%, var(--surface-strong) 90%);
   --border: rgba(36, 45, 43, 0.12);
   --accent: #1f756f;
   --accent-text: #ffffff;
@@ -20,6 +21,7 @@
   --muted: var(--tg-theme-hint-color, #a6b0b0);
   --surface: #17222c;
   --surface-strong: #202d38;
+  --control-bg: #202d38;
   --border: rgba(243, 238, 228, 0.14);
   --accent: #72d2c7;
   --accent-text: #071514;
@@ -36,6 +38,7 @@
     --muted: #a6b0b0;
     --surface: #17222c;
     --surface-strong: #202d38;
+    --control-bg: #202d38;
     --border: rgba(243, 238, 228, 0.14);
     --accent: #72d2c7;
     --accent-text: #071514;
@@ -481,7 +484,7 @@ a:focus-visible {
 }
 
 .secondary-button {
-  background: var(--surface-strong);
+  background: var(--control-bg);
   color: var(--text);
   border-color: var(--border);
   font-weight: 700;
@@ -502,10 +505,14 @@ a:focus-visible {
   align-items: center;
   width: 100%;
   padding: 12px;
-  background: var(--surface-strong);
+  background: color-mix(in srgb, var(--bg) 74%, var(--control-bg) 26%);
   color: var(--text);
   border-color: var(--border);
   text-align: left;
+}
+
+:root[data-theme="dark"] .option-button {
+  background: var(--control-bg);
 }
 
 .primary-button:active,
